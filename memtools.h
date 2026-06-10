@@ -13,6 +13,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <cwchar>
 #include <initializer_list>
 #include <psapi.h>
 #include <vector>
@@ -53,6 +55,107 @@ namespace memtools
 		int32_t jmpOffset = *(__unaligned int32_t*)aAddress;
 
 		return (PBYTE)aAddress + jmpOffset + 4;
+	}
+
+	namespace detail
+	{
+		inline bool SafeFollowRelative(void* aAddress, void*& aOut)
+		{
+			aOut = nullptr;
+			__try
+			{
+				aOut = FollowRelativeAddress(aAddress);
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		inline bool SafeStrcmpRelative(void* aAddress, const char* aExpected, bool& aMatches)
+		{
+			aMatches = false;
+			__try
+			{
+				aMatches = std::strcmp((const char*)FollowRelativeAddress(aAddress), aExpected) == 0;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		inline bool SafeWcscmpRelative(void* aAddress, const wchar_t* aExpected, bool& aMatches)
+		{
+			aMatches = false;
+			__try
+			{
+				aMatches = std::wcscmp((const wchar_t*)FollowRelativeAddress(aAddress), aExpected) == 0;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		inline bool SafeCmpI8(void* aAddress, int8_t aExpected, bool& aMatches)
+		{
+			aMatches = false;
+			__try
+			{
+				aMatches = *(__unaligned int8_t*)aAddress == aExpected;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		inline bool SafeCmpI16(void* aAddress, int16_t aExpected, bool& aMatches)
+		{
+			aMatches = false;
+			__try
+			{
+				aMatches = *(__unaligned int16_t*)aAddress == aExpected;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		inline bool SafeCmpI32(void* aAddress, int32_t aExpected, bool& aMatches)
+		{
+			aMatches = false;
+			__try
+			{
+				aMatches = *(__unaligned int32_t*)aAddress == aExpected;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		inline bool SafeCmpI64(void* aAddress, int64_t aExpected, bool& aMatches)
+		{
+			aMatches = false;
+			__try
+			{
+				aMatches = *(__unaligned int64_t*)aAddress == aExpected;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
 	}
 
 	inline void* FollowJmpChain(PBYTE aPointer)
@@ -514,37 +617,67 @@ namespace memtools
 								}
 								case EOperation::follow:
 								{
-									resultAddr = FollowRelativeAddress((PBYTE)resultAddr);
+									void* followed = nullptr;
+									if (!detail::SafeFollowRelative(resultAddr, followed))
+									{
+										instructionsFailed++;
+										break;
+									}
+									resultAddr = followed;
 									break;
 								}
 								case EOperation::strcmp:
 								{
-									instructionsFailed += strcmp((const char*)FollowRelativeAddress(resultAddr), inst.String) == 0 ? 0 : 1;
+									bool matches = false;
+									if (!detail::SafeStrcmpRelative(resultAddr, inst.String, matches) || !matches)
+									{
+										instructionsFailed++;
+									}
 									break;
 								}
 								case EOperation::wcscmp:
 								{
-									instructionsFailed += wcscmp((const wchar_t*)FollowRelativeAddress(resultAddr), inst.WString) == 0 ? 0 : 1;
+									bool matches = false;
+									if (!detail::SafeWcscmpRelative(resultAddr, inst.WString, matches) || !matches)
+									{
+										instructionsFailed++;
+									}
 									break;
 								}
 								case EOperation::cmpi8:
 								{
-									instructionsFailed += *((int8_t*)resultAddr) == (int8_t)inst.Value ? 0 : 1;
+									bool matches = false;
+									if (!detail::SafeCmpI8(resultAddr, (int8_t)inst.Value, matches) || !matches)
+									{
+										instructionsFailed++;
+									}
 									break;
 								}
 								case EOperation::cmpi16:
 								{
-									instructionsFailed += *((int16_t*)resultAddr) == (int16_t)inst.Value ? 0 : 1;
+									bool matches = false;
+									if (!detail::SafeCmpI16(resultAddr, (int16_t)inst.Value, matches) || !matches)
+									{
+										instructionsFailed++;
+									}
 									break;
 								}
 								case EOperation::cmpi32:
 								{
-									instructionsFailed += *((int32_t*)resultAddr) == (int32_t)inst.Value ? 0 : 1;
+									bool matches = false;
+									if (!detail::SafeCmpI32(resultAddr, (int32_t)inst.Value, matches) || !matches)
+									{
+										instructionsFailed++;
+									}
 									break;
 								}
 								case EOperation::cmpi64:
 								{
-									instructionsFailed += *((int64_t*)resultAddr) == (int64_t)inst.Value ? 0 : 1;
+									bool matches = false;
+									if (!detail::SafeCmpI64(resultAddr, (int64_t)inst.Value, matches) || !matches)
+									{
+										instructionsFailed++;
+									}
 									break;
 								}
 								case EOperation::pushaddr:
