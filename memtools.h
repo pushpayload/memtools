@@ -156,44 +156,61 @@ namespace memtools
 				return false;
 			}
 		}
+
+		inline PBYTE SafeFollowJmpChain(PBYTE aPointer)
+		{
+			if (!aPointer)
+			{
+				return nullptr;
+			}
+
+			__try
+			{
+				while (true)
+				{
+					if (aPointer[0] == 0xEB)
+					{
+						/* short jmp */
+						/* address is relative to after jmp */
+						aPointer += 2 + *(__unaligned int8_t*) & aPointer[1]; // jmp +imm8
+					}
+					else if (aPointer[0] == 0xE9)
+					{
+						/* near jmp */
+						/* address is relative to after jmp */
+						aPointer += 5 + *(__unaligned int32_t*) &aPointer[1]; // jmp +imm32
+					}
+					else if (aPointer[0] == 0xFF && aPointer[1] == 0x25)
+					{
+						/* far jmp */
+						/* x64: address is relative to after jmp */
+						/* x86: absolute address can be read directly */
+#ifdef _WIN64
+						aPointer += 6 + *(__unaligned int32_t*) &aPointer[2]; // jmp [+imm32]
+#else
+						aPointer = *(__unaligned int32_t*) &aPointer[2]; // jmp [imm32]
+#endif
+						/* dereference to get the actual target address */
+						aPointer = *(__unaligned PBYTE*)aPointer;
+					}
+					else
+					{
+						break;
+					}
+				}
+
+				return aPointer;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return nullptr;
+			}
+		}
 	}
 
 	inline void* FollowJmpChain(PBYTE aPointer)
 	{
-		while (true)
-		{
-			if (aPointer[0] == 0xEB)
-			{
-				/* short jmp */
-				/* address is relative to after jmp */
-				aPointer += 2 + *(__unaligned int8_t*) & aPointer[1]; // jmp +imm8
-			}
-			else if (aPointer[0] == 0xE9)
-			{
-				/* near jmp */
-				/* address is relative to after jmp */
-				aPointer += 5 + *(__unaligned int32_t*) &aPointer[1]; // jmp +imm32
-			}
-			else if (aPointer[0] == 0xFF && aPointer[1] == 0x25)
-			{
-				/* far jmp */
-				/* x64: address is relative to after jmp */
-				/* x86: absolute address can be read directly */
-#ifdef _WIN64
-				aPointer += 6 + *(__unaligned int32_t*) &aPointer[2]; // jmp [+imm32]
-#else
-				aPointer = *(__unaligned int32_t*) &aPointer[2]; // jmp [imm32]
-#endif
-				/* dereference to get the actual target address */
-				aPointer = *(__unaligned PBYTE*)aPointer;
-			}
-			else
-			{
-				break;
-			}
-		}
-
-		return aPointer;
+		return detail::SafeFollowJmpChain(aPointer);
 	}
 
 	///----------------------------------------------------------------------------------------------------
@@ -334,6 +351,41 @@ namespace memtools
 	inline bool operator!=(const Pattern& lhs, const Pattern& rhs)
 	{
 		return !(lhs == rhs);
+	}
+
+	namespace detail
+	{
+		inline bool ProbeReadableRange(PBYTE aBase, uint64_t aRegionSize)
+		{
+			if (!aBase || aRegionSize == 0)
+			{
+				return false;
+			}
+
+			__try
+			{
+				volatile uint8_t touch = aBase[0];
+				touch = aBase[aRegionSize - 1];
+				(void)touch;
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		inline bool SafeMatchPattern(const Pattern& lhs, PBYTE rhs)
+		{
+			__try
+			{
+				return lhs == rhs;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
 	}
 
 	///----------------------------------------------------------------------------------------------------
@@ -570,11 +622,16 @@ namespace memtools
 				PBYTE base = (PBYTE)mbi.BaseAddress;
 				uint64_t end = mbi.RegionSize - this->Assembly.Size; // ensure not going out of bounds
 
+				if (!detail::ProbeReadableRange(base, mbi.RegionSize))
+				{
+					continue;
+				}
+
 				bool isMatch = false;
 
 				for (uint64_t i = 0; i < end; i++)
 				{
-					isMatch = this->Assembly == &base[i];
+					isMatch = detail::SafeMatchPattern(this->Assembly, &base[i]);
 
 					if (isMatch)
 					{
@@ -687,6 +744,11 @@ namespace memtools
 								}
 								case EOperation::popaddr:
 								{
+									if (addrStore.empty())
+									{
+										instructionsFailed++;
+										break;
+									}
 									resultAddr = addrStore.back();
 									addrStore.pop_back();
 									break;
